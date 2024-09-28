@@ -11,9 +11,22 @@
 //! ```
 //!
 //! Alternatively, it can be an expression of type implementing [`Matcher`] or one that dereferences to a [`Matcher`].
-//! [`Matcher`] is implemented for `regex::Regex` (if the `regex` feature is enabled) and `once_cell::sync::Lazy<T>` with any `T: Matcher`.
+//! [`Matcher`] is implemented for `regex::Regex` (if the `regex` feature is enabled) and `std::sync::LazyLock` / `once_cell::sync::Lazy<T>` with any `T: Matcher`.
 //! Please note that the expression will be evaluated each time `validate` is called, so avoid doing any expensive work in the expression.
-//! If the work is unavoidable, at least try to amortize it, such as by using `once_cell::Lazy` or the nightly-only `std::sync::LazyLock`.
+//! If the work is unavoidable, at least try to amortize it, such as by using `std::sync::LazyLock` or `once_cell::Lazy`.
+//!
+//! ```rust
+//! use std::sync::LazyLock;
+//! use regex::Regex;
+//!
+//! static LAZY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-zA-Z0-9][a-zA-Z0-9_]+").unwrap());
+//!
+//! #[derive(garde::Validate)]
+//! struct Test {
+//!     #[garde(pattern(LAZY_RE))]
+//!     v: String,
+//! }
+//! ```
 //!
 //! ```rust
 //! use once_cell::sync::Lazy;
@@ -50,6 +63,12 @@ pub trait Matcher: AsStr {
     fn is_match(&self, haystack: &str) -> bool;
 }
 
+impl<T: Matcher> Matcher for std::sync::LazyLock<T> {
+    fn is_match(&self, haystack: &str) -> bool {
+        std::sync::LazyLock::force(self).is_match(haystack)
+    }
+}
+
 pub trait Pattern {
     fn validate_pattern<M: Matcher>(&self, matcher: &M) -> bool;
 }
@@ -77,7 +96,7 @@ impl<T: Pattern> Pattern for Option<T> {
 ))]
 #[doc(hidden)]
 pub mod regex_js_sys {
-    pub use ::js_sys::RegExp;
+    pub use js_sys::RegExp;
 
     use super::*;
 
@@ -117,7 +136,7 @@ pub mod regex_js_sys {
     unsafe impl<T> Send for SyncWrapper<T> {}
     unsafe impl<T> Sync for SyncWrapper<T> {}
 
-    pub type StaticPattern = once_cell::sync::Lazy<SyncWrapper<RegExp>>;
+    pub type StaticPattern = std::sync::LazyLock<SyncWrapper<RegExp>>;
 
     #[macro_export]
     macro_rules! __init_js_sys_pattern {
@@ -134,9 +153,9 @@ pub mod regex_js_sys {
 #[cfg(feature = "regex")]
 #[doc(hidden)]
 pub mod regex {
-    pub use ::regex::Regex;
+    pub use regex::Regex;
 
-    use super::*;
+    use super::{AsStr, Matcher};
 
     impl Matcher for Regex {
         fn is_match(&self, haystack: &str) -> bool {
@@ -156,13 +175,19 @@ pub mod regex {
         }
     }
 
+    impl<T: AsStr> AsStr for std::sync::LazyLock<T> {
+        fn as_str(&self) -> &str {
+            std::sync::LazyLock::force(self).as_str()
+        }
+    }
+
     impl<T: AsStr> AsStr for once_cell::sync::Lazy<T> {
         fn as_str(&self) -> &str {
             once_cell::sync::Lazy::force(self).as_str()
         }
     }
 
-    pub type StaticPattern = once_cell::sync::Lazy<Regex>;
+    pub type StaticPattern = std::sync::LazyLock<Regex>;
 
     #[macro_export]
     macro_rules! __init_pattern {
